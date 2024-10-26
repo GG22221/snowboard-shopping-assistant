@@ -1,6 +1,17 @@
 import streamlit as st
 from openai import OpenAI
 
+
+# custom css to hide top right menu bar
+hide_streamlit_style = """
+<style>
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+</style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True) 
+
+
 # Show title and description.
 st.title("💬 Chatbot")
 st.write(
