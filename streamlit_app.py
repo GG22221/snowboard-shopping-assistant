@@ -79,7 +79,7 @@ if "messages" not in st.session_state:
         "role": "assistant",
         "items": [{
             "type": "text",
-            "content": "Hi! I'm here to assist you in finding the perfect snowboard gear. Can you provide details "
+            "content": "Hi! I'm here to assist you in finding the perfect snowboard gears. Can you provide details "
                        "about your gender, riding style, experience, or budget, then we can get started?"
         }]
     }
@@ -112,7 +112,7 @@ for message in st.session_state.messages:
                     with st.status("Results", state="complete"):
                         st.code(item["content"])
 
-if prompt := st.chat_input("Ask me anything about snowboarding!"):
+if prompt := st.chat_input("Ask anything about snowboards, bindings, boots, clothing, goggles, helmets"):
     if moderation_endpoint(prompt):
         st.toast("Your message was flagged. Please try again.", icon="⚠️")
         st.stop
