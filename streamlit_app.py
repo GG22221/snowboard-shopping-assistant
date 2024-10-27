@@ -1,67 +1,154 @@
+import os
 import streamlit as st
 from openai import OpenAI
+from typing_extensions import override
+from openai import AssistantEventHandler
+
+from openai.types.beta.assistant_stream_event import (
+    ThreadRunStepCreated,
+    ThreadRunStepDelta,
+    ThreadRunStepCompleted,
+    ThreadMessageCreated,
+    ThreadMessageDelta
+    )
+from openai.types.beta.threads.text_delta_block import TextDeltaBlock
+from openai.types.beta.threads.runs.tool_calls_step_details import ToolCallsStepDetails
+from openai.types.beta.threads.runs.code_interpreter_tool_call import (
+    CodeInterpreterOutputImage,
+    CodeInterpreterOutputLogs
+    )
 
 
-# custom css to hide top right menu bar
-hide_streamlit_style = """
-<style>
-#MainMenu {visibility: hidden;}
-footer {visibility: hidden;}
-</style>
-"""
-st.markdown(hide_streamlit_style, unsafe_allow_html=True) 
+OPENAI_ASSISTANT_ID = os.environ.get("OPENAI_ASSISTANT_ID", st.secrets["OPENAI_ASSISTANT_ID"])
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", st.secrets["OPENAI_API_KEY"])
+
+# Moderation check
+def moderation_endpoint(text) -> bool:
+    """
+    Checks if the text is triggers the moderation endpoint
+
+    Args:
+    - text (str): The text to check
+
+    Returns:
+    - bool: True if the text is flagged
+    """
+    response = client.moderations.create(input=text)
+    return response.results[0].flagged
 
 
-# Show title and description.
-st.title("💬 Chatbot")
-st.write(
-    "This is a simple chatbot that uses OpenAI's GPT-3.5 model to generate responses. "
-    "To use this app, you need to provide an OpenAI API key, which you can get [here](https://platform.openai.com/account/api-keys). "
-    "You can also learn how to build this app step by step by [following our tutorial](https://docs.streamlit.io/develop/tutorials/llms/build-conversational-apps)."
-)
+def delete_thread(thread_id) -> None:
+    """
+    Delete the thread
 
-# Ask user for their OpenAI API key via `st.text_input`.
-# Alternatively, you can store the API key in `./.streamlit/secrets.toml` and access it
-# via `st.secrets`, see https://docs.streamlit.io/develop/concepts/connections/secrets-management
-openai_api_key = st.text_input("OpenAI API Key", type="password")
-if not openai_api_key:
-    st.info("Please add your OpenAI API key to continue.", icon="🗝️")
-else:
+    Args:
+    - thread_id (str): The id of the thread to delete
+    """
+    client.beta.threads.delete(thread_id)
+    print(f"Deleted thread: \t {thread_id}")
 
-    # Create an OpenAI client.
-    client = OpenAI(api_key=openai_api_key)
 
-    # Create a session state variable to store the chat messages. This ensures that the
-    # messages persist across reruns.
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+# hide_streamlit_style = """
+# <style>
+# #MainMenu {visibility: hidden;}
+# footer {visibility: hidden;}
+# </style>
+# """
+# st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-    # Display the existing chat messages via `st.chat_message`.
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+#  apply custom CSS to hide the Streamlit menu, header, and footer
+st.html("""
+        <style>
+            #MainMenu {visibility: hidden}
+            #header {visibility: hidden}
+            #footer {visibility: hidden}
+            .block-container {
+                padding-top: 3rem;
+                padding-bottom: 2rem;
+                padding-left: 3rem;
+                padding-right: 3rem;
+                }
+        </style>
+        """)
 
-    # Create a chat input field to allow the user to enter a message. This will display
-    # automatically at the bottom of the page.
-    if prompt := st.chat_input("What is up?"):
 
-        # Store and display the current prompt.
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+# Show title and greetings.
+st.title("🏂 Snowboard Guru")
+if "messages" not in st.session_state:
+    greetings = {
+        "role": "assistant",
+        "items": [{
+            "type": "text",
+            "content": "Hi! I'm here to assist you in finding the perfect snowboard gear. Can you provide details "
+                       "about your gender, riding style, experience, or budget, then we can get started?"
+        }]
+    }
+    st.session_state["messages"] = [greetings]
 
-        # Generate a response using the OpenAI API.
-        stream = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": m["role"], "content": m["content"]}
-                for m in st.session_state.messages
-            ],
-            stream=True,
+
+# Create a new open ai thread
+client = OpenAI(api_key=OPENAI_API_KEY)
+if "thread_id" not in st.session_state:
+    thread = client.beta.threads.create()
+    st.session_state.thread_id = thread.id
+    print(st.session_state.thread_id)
+
+
+# UI rendering
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        if "items" in message:
+            for item in message["items"]:
+                item_type = item["type"]
+                if item_type == "text":
+                    st.markdown(item["content"])
+                elif item_type == "image":
+                    for image in item["content"]:
+                        st.html(image)
+                elif item_type == "code_input":
+                    with st.status("Code", state="complete"):
+                        st.code(item["content"])
+                elif item_type == "code_output":
+                    with st.status("Results", state="complete"):
+                        st.code(item["content"])
+
+if prompt := st.chat_input("Ask me anything about snowboarding!"):
+    if moderation_endpoint(prompt):
+        st.toast("Your message was flagged. Please try again.", icon="⚠️")
+        st.stop
+
+    st.session_state.messages.append({"role": "user", "items": [{"type": "text","content": prompt}]})
+
+    client.beta.threads.messages.create(
+        thread_id=st.session_state.thread_id,
+        role="user",
+        content=prompt
+    )
+
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    with st.chat_message("assistant"):
+        stream = client.beta.threads.runs.create(
+            thread_id=st.session_state.thread_id,
+            assistant_id=OPENAI_ASSISTANT_ID,
+            stream=True
         )
 
-        # Stream the response to the chat using `st.write_stream`, then store it in 
-        # session state.
-        with st.chat_message("assistant"):
-            response = st.write_stream(stream)
-        st.session_state.messages.append({"role": "assistant", "content": response})
+        assistant_output = []
+
+        for event in stream:
+            print(event)
+            if isinstance(event, ThreadMessageCreated):
+                assistant_output.append({"type": "text",
+                                         "content": ""})
+                assistant_text_box = st.empty()
+
+            elif isinstance(event, ThreadMessageDelta):
+                if isinstance(event.data.delta.content[0], TextDeltaBlock):
+                    assistant_text_box.empty()
+                    assistant_output[-1]["content"] += event.data.delta.content[0].text.value
+                    assistant_text_box.markdown(assistant_output[-1]["content"])
+
+        st.session_state.messages.append({"role": "assistant", "items": assistant_output})
+
